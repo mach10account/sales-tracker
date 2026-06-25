@@ -57,9 +57,9 @@
   .pill.ok{color:var(--ok); border-color:rgba(34,201,138,.4); background:rgba(34,201,138,.1)}
   .pill.bad{color:var(--bad); border-color:rgba(255,92,114,.4); background:rgba(255,92,114,.1)}
   .pill.warn{color:var(--warn); border-color:rgba(255,177,61,.4); background:rgba(255,177,61,.1)}
-  input[type=text],input[type=date],textarea,select{
+  input[type=text],input[type=date],input[type=month],textarea,select{
     width:100%; background:var(--card); border:1.5px solid var(--line); color:var(--txt);
-    border-radius:13px; padding:15px 14px; font-size:17px; outline:none; font-family:inherit}
+    border-radius:13px; padding:15px 14px; font-size:17px; outline:none; font-family:inherit; color-scheme:dark}
   input:focus,textarea:focus,select:focus{border-color:var(--acc)}
   textarea{resize:vertical; min-height:74px}
   label.fld{display:block; margin:16px 0 7px; font-size:13px; color:var(--mut); font-weight:650; text-transform:uppercase; letter-spacing:.4px}
@@ -211,6 +211,7 @@ const I18N = {
     callDetail:`Call detail`, remember:`Remember:`, reasonColon:`Reason:`, followupColon:`Follow-up:`,
     resolved:`resolved`, unresolved:`unresolved`, funnelSec:`Funnel`, newCallProspect:`🔁 New call for this prospect`,
     deleteBtn:`🗑️ Delete`, deleteConfirm:`Delete this call permanently? It will be removed from every device.`, deleting:`Deleting…`, deleted:`Call deleted`, deleteFailed:`Delete failed — try again`, demoBadge:`DEMO`,
+    editReport:`Edit`, jumpReview:`Review →`, discardEdit:`Discard changes?`, updated:`Call updated`, filterAll:`All`, results:`{n} results`, noInRange:`No calls in this period.`,
     analyticsHdr:`Analytics`, noDataYet:`No data yet.`, logToUnlock:`Log a few calls to unlock insights.`,
     pDay:`Today`, pWeek:`Week`, pMonth:`Month`, pQuarter:`Quarter`, pYear:`Year`, pAll:`Lifetime`,
     calls:`calls`, closeRate:`close rate`, closed:`closed`, depToContract:`deposit → contract`, contractToClose:`contract → close`,
@@ -269,6 +270,7 @@ const I18N = {
     callDetail:`פרטי שיחה`, remember:`לזכור:`, reasonColon:`סיבה:`, followupColon:`מעקב:`,
     resolved:`טופלה`, unresolved:`לא טופלה`, funnelSec:`משפך`, newCallProspect:`🔁 שיחה חדשה ללקוח זה`,
     deleteBtn:`🗑️ מחק`, deleteConfirm:`למחוק את השיחה לצמיתות? היא תוסר מכל המכשירים.`, deleting:`מוחק…`, deleted:`השיחה נמחקה`, deleteFailed:`המחיקה נכשלה — נסה שוב`, demoBadge:`הדגמה`,
+    editReport:`עריכה`, jumpReview:`לסקירה ←`, discardEdit:`לבטל את השינויים?`, updated:`השיחה עודכנה`, filterAll:`הכל`, results:`{n} תוצאות`, noInRange:`אין שיחות בתקופה זו.`,
     analyticsHdr:`ניתוח`, noDataYet:`אין עדיין נתונים.`, logToUnlock:`תעד כמה שיחות כדי לפתוח תובנות.`,
     pDay:`היום`, pWeek:`שבוע`, pMonth:`חודש`, pQuarter:`רבעון`, pYear:`שנה`, pAll:`כל הזמן`,
     calls:`שיחות`, closeRate:`אחוז סגירה`, closed:`נסגרו`, depToContract:`מקדמה ← חוזה`, contractToClose:`חוזה ← סגירה`,
@@ -354,6 +356,10 @@ let nav = [];            // screen history stack
 let call = null;         // in-progress call (in memory only)
 let cache = null;        // last fetched calls list
 let modal = null;        // active modal renderer
+let editing = false;     // true while editing an already-saved call (save → update same id)
+let HPERIOD = "all";     // History date filter: relative period
+let HMONTH = "";         // History date filter: a specific "YYYY-MM" (overrides HPERIOD)
+const EDIT_SCREENS = new Set(["qual","collateral","funnel","outcome","evalScreen","followup","review"]);
 
 const DEFAULT_URL = "https://n8n.srv1035791.hstgr.cloud/webhook/sales-tracker";
 const LS = {
@@ -429,6 +435,7 @@ function reset(to){ nav=[{screen:to||"home"}]; render(); }
 /* ============================ RENDER ROUTER ============================ */
 function render(){
   const cur = nav[nav.length-1];
+  if(!EDIT_SCREENS.has(cur.screen)) editing = false;   // edit mode only lives inside the wizard
   const fn = SCREENS[cur.screen] || SCREENS.home;
   app.innerHTML = fn(cur.opts||{});
   window.scrollTo(0,0);
@@ -602,10 +609,22 @@ SCREENS.saved = () => `
 
 // ---- history ----
 SCREENS.history = () => {
-  const calls = (cache||[]).slice().sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+  const total = (cache||[]).length;
+  let calls = (cache||[]).slice().sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+  if(HMONTH){ calls = calls.filter(c=>{ const d=new Date(c.timestamp); return (d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"))===HMONTH; }); }
+  else if(HPERIOD!=="all"){ calls = inRange(calls, range(HPERIOD)); }
+  const segs=[["all",t("filterAll")],["day",t("pDay")],["week",t("pWeek")],["month",t("pMonth")],["quarter",t("pQuarter")],["year",t("pYear")]];
+  const filterUI = total? `
+  <div class="seg2">${segs.map(([k,l])=>`<button class="${(!HMONTH&&HPERIOD===k)?"on":""}" data-act="hperiod" data-val="${k}">${esc(l)}</button>`).join("")}</div>
+  <div style="display:flex; align-items:center; gap:10px; margin:0 2px 12px">
+    <input type="month" id="h_month" value="${esc(HMONTH)}" onchange="setHMonth(this.value)" style="flex:1; padding:11px 12px; font-size:15px">
+    ${HMONTH?`<button class="iconbtn" data-act="hperiod" data-val="all" title="${esc(t("filterAll"))}">✕</button>`:""}
+  </div>
+  <div class="muted small" style="margin:0 2px 12px">${esc(fmt(t("results"),{n:calls.length}))}</div>` : "";
   return `
   ${header("home",t("history"))}
-  ${calls.length? calls.map(hcard).join("") : `<div class="empty"><span class="em">🗂️</span>${esc(t("noCallsYet"))}<br>${esc(t("startFirst"))}</div>`}`;
+  ${filterUI}
+  ${calls.length? calls.map(hcard).join("") : `<div class="empty"><span class="em">🗂️</span>${total?esc(t("noInRange")):`${esc(t("noCallsYet"))}<br>${esc(t("startFirst"))}`}</div>`}`;
 };
 
 SCREENS.detail = (o) => {
@@ -619,6 +638,10 @@ SCREENS.detail = (o) => {
     <div class="av" style="width:52px;height:52px;font-size:24px">${outcomeEmoji(c.outcome)}</div>
     <div><div style="font-size:20px; font-weight:800">${esc(c.prospectName||t("unnamedProspect"))}</div>
     <div class="muted small">${fmtDate(c.timestamp)} · ${fmtTime(c.timestamp)} · ${esc(dayFull(new Date(c.timestamp).getDay()))}</div></div>
+  </div>
+  <div style="display:flex; gap:10px; margin-bottom:14px">
+    <button class="btn ghost" style="flex:1" data-act="editcall" data-val="${c.id}">✏️ ${esc(t("editReport"))}</button>
+    <button class="btn ghost" style="flex:1; color:var(--bad); border-color:rgba(255,92,114,.4)" data-act="delcall" data-val="${c.id}">${esc(t("deleteBtn"))}</button>
   </div>
   ${hasNote?`<div class="note">📌 <b>${esc(t("remember"))}</b> ${esc(c.personalDetail||"")}${c.followUpReason?`<br><span class="muted">${esc(t("reasonColon"))}</span> ${esc(c.followUpReason)}`:""}${c.followUpDate?`<br><span class="muted">${esc(t("followupColon"))}</span> ${fmtDate(c.followUpDate)}`:""}</div>`:""}
   <div class="card" style="margin-bottom:14px">
@@ -635,10 +658,7 @@ SCREENS.detail = (o) => {
   ${(c.objections||[]).length?`<div class="sec">${esc(t("kvObjections"))}</div><div class="card">${c.objections.map(o=>`<div class="kv"><span class="k">${esc(lbl("objection",o.type))} <span class="small">@ ${esc(lbl("stage",o.stage)||"?")}</span></span><span class="v ${o.resolved==="Yes"?"up":"down"}">${esc(o.resolved==="Yes"?t("resolved"):t("unresolved"))}</span></div>`).join("")}</div>`:""}
   <div class="sec">${esc(t("funnelSec"))}</div>
   <div class="card" style="padding:4px 14px">${FUNNEL.map(([nm])=>{const v=f[nm]; return `<div class="kv"><span class="k">${esc(lbl("stage",nm))}</span><span class="v">${v?`<span class="pill ${v==="Passed"?"ok":(v==="Failed"?"bad":"warn")}" style="padding:2px 9px">${esc(lbl("status",v))}</span>`:'<span class="muted small">—</span>'}</span></div>`;}).join("")}</div>
-  <div class="sticky">
-    <button class="btn ghost" style="flex:0 0 32%; color:var(--bad); border-color:rgba(255,92,114,.4)" data-act="delcall" data-val="${c.id}">${esc(t("deleteBtn"))}</button>
-    <button class="btn primary" data-act="reopen" data-val="${c.id}">${esc(t("newCallProspect"))}</button>
-  </div>`;
+  <div class="sticky"><button class="btn primary" data-act="reopen" data-val="${c.id}">${esc(t("newCallProspect"))}</button></div>`;
 };
 
 // ---- analytics ----
@@ -716,6 +736,7 @@ function header(backTo, title){
   return `<div class="topbar">
     <button class="back" data-act="${backTo?"nav":"back"}" data-val="${backTo||""}">${esc(t("back"))}</button>
     <h1 style="text-align:center; flex:1; font-size:16px">${esc(title||"")}</h1>
+    ${editing?`<button class="iconbtn" data-act="toreview" title="${esc(t("reviewHdr"))}" style="width:auto; padding:0 12px; font-size:13px; font-weight:700; color:var(--acc2)">${esc(t("jumpReview"))}</button>`:""}
     <button class="iconbtn" data-act="abort" title="${esc(t("cancel"))}">✕</button>
   </div>`;
 }
@@ -855,7 +876,7 @@ function handle(act, val, tg, e){
     case "nav": go(val); break;
     case "lang": setLang(LANG==="he"?"en":"he"); break;
     case "setlang": setLang(val); break;
-    case "abort": if(confirm(t("discardCall"))){ call=null; reset("home"); } break;
+    case "abort": if(confirm(t(editing?"discardEdit":"discardCall"))){ call=null; reset("home"); } break;
     case "newcall": startCall(); break;
     case "qual": setQual(val); break;
     case "collat": toggleCollat(val); break;
@@ -868,7 +889,10 @@ function handle(act, val, tg, e){
     case "save": doSave(); break;
     case "detail": go("detail",{id:val}); break;
     case "reopen": reopen(val); break;
+    case "editcall": editCall(val); break;
     case "delcall": delCall(val); break;
+    case "toreview": saveFollowupFields(); go("review"); break;
+    case "hperiod": HPERIOD=val; HMONTH=""; render(); break;
     case "period": APERIOD=val; render(); break;
     case "objmodal": modal="obj"; openModal("obj"); break;
     case "closemodal": closeModal(); break;
@@ -882,9 +906,17 @@ function handle(act, val, tg, e){
 }
 function startCall(){
   call = { id:uid(), timestamp:new Date().toISOString(), funnel:{}, objections:[], collateral:[] };
-  objDraft=null;
+  objDraft=null; editing=false;
   nav=[{screen:"home"},{screen:"qual",opts:{i:0}}]; render();
 }
+function editCall(id){
+  const c=(cache||[]).find(x=>x.id===id); if(!c) return;
+  call = JSON.parse(JSON.stringify(c));           // deep copy — keeps the SAME id + timestamp
+  call.funnel = call.funnel||{}; call.objections = call.objections||[]; call.collateral = call.collateral||[];
+  objDraft=null; editing=true;
+  nav=[{screen:"history"},{screen:"detail",opts:{id}},{screen:"qual",opts:{i:0}}]; render();
+}
+function setHMonth(v){ HMONTH=v||""; if(HMONTH) HPERIOD="all"; render(); }
 function setQual(val){
   const cur=nav[nav.length-1]; const i=cur.opts.i;
   call[QUAL[i].key]=val;
@@ -909,13 +941,14 @@ function afterEval(){
   if(needFollow) go("followup"); else go("review");
 }
 function saveFollowupFields(){
-  const g=id=>{ const el=document.getElementById(id); return el?el.value.trim():""; };
-  call.prospectName=g("f_name")||call.prospectName||"";
-  call.followUpReason=g("f_reason");
-  call.followUpDate=g("f_date");
-  call.personalDetail=g("f_detail");
+  const el=id=>document.getElementById(id);   // only update a field if its input is on-screen
+  if(el("f_name")) call.prospectName=el("f_name").value.trim()||call.prospectName||"";
+  if(el("f_reason")) call.followUpReason=el("f_reason").value.trim();
+  if(el("f_date")) call.followUpDate=el("f_date").value.trim();
+  if(el("f_detail")) call.personalDetail=el("f_detail").value.trim();
 }
 async function doSave(){
+  const wasEditing = editing;
   const nameEl=document.getElementById("r_name"); if(nameEl) call.prospectName=(nameEl.value||"").trim();
   if(!OUTCOME_FOLLOWUP.includes(call.outcome) && !Object.values(call.funnel).includes("Postponed")){
     call.followUpReason=""; call.followUpDate=""; call.personalDetail="";
@@ -927,8 +960,12 @@ async function doSave(){
   try{
     toast(t("saving"));
     await Store.save(c);
-    cache = cache||[]; cache.push(normalize(serialize(c)));
+    cache = cache||[];
+    const nc = normalize(serialize(c));
+    const ix = cache.findIndex(x=>x.id===c.id);
+    if(ix>=0) cache[ix]=nc; else cache.push(nc);   // upsert: editing replaces the same id
     call=null; nav=[{screen:"home"},{screen:"saved"}]; render();
+    if(wasEditing) toast(t("updated"),"ok");
   }catch(err){
     toast(t("saveFailed"), "bad");
     console.error(err);
@@ -938,7 +975,7 @@ function reopen(id){
   const c=(cache||[]).find(x=>x.id===id); if(!c) return;
   call = { id:uid(), timestamp:new Date().toISOString(), funnel:{}, objections:[], collateral:[],
     prospectName:c.prospectName, prospectType:c.prospectType, mainGoal:c.mainGoal, loanSize:c.loanSize };
-  objDraft=null;
+  objDraft=null; editing=false;
   if(c.personalDetail||c.followUpReason) toast("📌 "+(c.personalDetail||c.followUpReason));
   nav=[{screen:"home"},{screen:"qual",opts:{i:0}}]; render();
 }
