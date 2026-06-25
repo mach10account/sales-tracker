@@ -733,11 +733,13 @@ SCREENS.settings = () => `
 
 /* ============================ COMPONENTS ============================ */
 function header(backTo, title){
+  // ✕ (discard) belongs only while a call is in progress (logging or editing); the review-jump only while editing.
+  const review = editing ? `<button class="iconbtn" data-act="toreview" title="${esc(t("reviewHdr"))}" style="width:auto; padding:0 12px; font-size:13px; font-weight:700; color:var(--acc2)">${esc(t("jumpReview"))}</button>` : "";
+  const close = call ? `<button class="iconbtn" data-act="abort" title="${esc(t("cancel"))}">✕</button>` : `<div style="width:42px; flex:0 0 auto"></div>`;
   return `<div class="topbar">
     <button class="back" data-act="${backTo?"nav":"back"}" data-val="${backTo||""}">${esc(t("back"))}</button>
     <h1 style="text-align:center; flex:1; font-size:16px">${esc(title||"")}</h1>
-    ${editing?`<button class="iconbtn" data-act="toreview" title="${esc(t("reviewHdr"))}" style="width:auto; padding:0 12px; font-size:13px; font-weight:700; color:var(--acc2)">${esc(t("jumpReview"))}</button>`:""}
-    <button class="iconbtn" data-act="abort" title="${esc(t("cancel"))}">✕</button>
+    ${review}${close}
   </div>`;
 }
 function progress(step,total){ return `<div class="progress"><i style="width:${pct(step,total)}%"></i></div>`; }
