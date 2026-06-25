@@ -210,6 +210,7 @@ const I18N = {
     noCallsYet:`No calls logged yet.`, startFirst:`Start your first call from home.`, unnamed:`Unnamed`, unnamedProspect:`Unnamed prospect`,
     callDetail:`Call detail`, remember:`Remember:`, reasonColon:`Reason:`, followupColon:`Follow-up:`,
     resolved:`resolved`, unresolved:`unresolved`, funnelSec:`Funnel`, newCallProspect:`🔁 New call for this prospect`,
+    deleteBtn:`🗑️ Delete`, deleteConfirm:`Delete this call permanently? It will be removed from every device.`, deleting:`Deleting…`, deleted:`Call deleted`, deleteFailed:`Delete failed — try again`, demoBadge:`DEMO`,
     analyticsHdr:`Analytics`, noDataYet:`No data yet.`, logToUnlock:`Log a few calls to unlock insights.`,
     pDay:`Today`, pWeek:`Week`, pMonth:`Month`, pQuarter:`Quarter`, pYear:`Year`, pAll:`Lifetime`,
     calls:`calls`, closeRate:`close rate`, closed:`closed`, depToContract:`deposit → contract`, contractToClose:`contract → close`,
@@ -267,6 +268,7 @@ const I18N = {
     noCallsYet:`עדיין לא תועדו שיחות.`, startFirst:`התחל את השיחה הראשונה מדף הבית.`, unnamed:`ללא שם`, unnamedProspect:`לקוח ללא שם`,
     callDetail:`פרטי שיחה`, remember:`לזכור:`, reasonColon:`סיבה:`, followupColon:`מעקב:`,
     resolved:`טופלה`, unresolved:`לא טופלה`, funnelSec:`משפך`, newCallProspect:`🔁 שיחה חדשה ללקוח זה`,
+    deleteBtn:`🗑️ מחק`, deleteConfirm:`למחוק את השיחה לצמיתות? היא תוסר מכל המכשירים.`, deleting:`מוחק…`, deleted:`השיחה נמחקה`, deleteFailed:`המחיקה נכשלה — נסה שוב`, demoBadge:`הדגמה`,
     analyticsHdr:`ניתוח`, noDataYet:`אין עדיין נתונים.`, logToUnlock:`תעד כמה שיחות כדי לפתוח תובנות.`,
     pDay:`היום`, pWeek:`שבוע`, pMonth:`חודש`, pQuarter:`רבעון`, pYear:`שנה`, pAll:`כל הזמן`,
     calls:`שיחות`, closeRate:`אחוז סגירה`, closed:`נסגרו`, depToContract:`מקדמה ← חוזה`, contractToClose:`חוזה ← סגירה`,
@@ -386,6 +388,10 @@ const Store = {
   async update(c){
     if(useDemo()){ const a=demoCalls().map(x=>x.id===c.id?c:x); demoSave(a); return; }
     await post({action:"update", call:serialize(c)});
+  },
+  async del(id){
+    if(useDemo()){ demoSave(demoCalls().filter(x=>x.id!==id)); return; }
+    await post({action:"delete", id});
   }
 };
 // flatten objects → strings for the Sheet; rebuild on read
@@ -444,7 +450,7 @@ SCREENS.home = () => {
   const cr = pct(month.filter(c=>c.outcome==="Closed").length, month.length);
   const due = followUpsDue(calls);
   return `
-  <div class="topbar"><h1>${esc(t("appTitle"))}</h1>
+  <div class="topbar"><h1>${esc(t("appTitle"))}${LS.demo?` <span class="pill warn" style="font-size:10px; padding:1px 7px; vertical-align:middle">🧪 ${esc(t("demoBadge"))}</span>`:""}</h1>
     <button class="iconbtn" data-act="lang" title="Language">🌐</button>
     <button class="iconbtn" data-act="nav" data-val="analytics">📊</button>
     <button class="iconbtn" data-act="nav" data-val="settings">⚙️</button>
@@ -629,7 +635,10 @@ SCREENS.detail = (o) => {
   ${(c.objections||[]).length?`<div class="sec">${esc(t("kvObjections"))}</div><div class="card">${c.objections.map(o=>`<div class="kv"><span class="k">${esc(lbl("objection",o.type))} <span class="small">@ ${esc(lbl("stage",o.stage)||"?")}</span></span><span class="v ${o.resolved==="Yes"?"up":"down"}">${esc(o.resolved==="Yes"?t("resolved"):t("unresolved"))}</span></div>`).join("")}</div>`:""}
   <div class="sec">${esc(t("funnelSec"))}</div>
   <div class="card" style="padding:4px 14px">${FUNNEL.map(([nm])=>{const v=f[nm]; return `<div class="kv"><span class="k">${esc(lbl("stage",nm))}</span><span class="v">${v?`<span class="pill ${v==="Passed"?"ok":(v==="Failed"?"bad":"warn")}" style="padding:2px 9px">${esc(lbl("status",v))}</span>`:'<span class="muted small">—</span>'}</span></div>`;}).join("")}</div>
-  <div class="sticky"><button class="btn primary" data-act="reopen" data-val="${c.id}">${esc(t("newCallProspect"))}</button></div>`;
+  <div class="sticky">
+    <button class="btn ghost" style="flex:0 0 32%; color:var(--bad); border-color:rgba(255,92,114,.4)" data-act="delcall" data-val="${c.id}">${esc(t("deleteBtn"))}</button>
+    <button class="btn primary" data-act="reopen" data-val="${c.id}">${esc(t("newCallProspect"))}</button>
+  </div>`;
 };
 
 // ---- analytics ----
@@ -859,6 +868,7 @@ function handle(act, val, tg, e){
     case "save": doSave(); break;
     case "detail": go("detail",{id:val}); break;
     case "reopen": reopen(val); break;
+    case "delcall": delCall(val); break;
     case "period": APERIOD=val; render(); break;
     case "objmodal": modal="obj"; openModal("obj"); break;
     case "closemodal": closeModal(); break;
@@ -931,6 +941,19 @@ function reopen(id){
   objDraft=null;
   if(c.personalDetail||c.followUpReason) toast("📌 "+(c.personalDetail||c.followUpReason));
   nav=[{screen:"home"},{screen:"qual",opts:{i:0}}]; render();
+}
+async function delCall(id){
+  if(!confirm(t("deleteConfirm"))) return;
+  try{
+    toast(t("deleting"));
+    await Store.del(id);
+    cache=(cache||[]).filter(x=>x.id!==id);   // optimistic remove
+    nav=[{screen:"home"},{screen:"history"}]; render();
+    toast(t("deleted"),"ok");
+    loadCache(true);                          // re-sync from the store to confirm
+  }catch(err){
+    toast(t("deleteFailed"),"bad"); console.error(err);
+  }
 }
 
 /* ============================ MODALS (objections) ============================ */
